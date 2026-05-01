@@ -3,7 +3,7 @@
 Script Python che legge un foglio Google Spreadsheet contenente i dati di un pre-cep di Twig e lo esporta in un file JSON strutturato.
 
 ## GitHub
-
+https://github.com/simo2409/twig-precep-reader-v1
 
 ## Esempio
 $ uv run main.py "https://..." --sheet 1

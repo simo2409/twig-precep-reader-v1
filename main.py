@@ -5,13 +5,39 @@ import sys
 from pathlib import Path
 
 import gspread
-from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
-
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 TOKEN_FILE = "token.json"
+
+_METADATA_RANGES = ["B1", "B2", "B3", "D1", "D2", "D3"]
+_METADATA_KEYS = [
+    "codice_progetto",
+    "inizio_progetto",
+    "fine_progetto",
+    "link_cep",
+    "titolo_preventivo",
+    "descrizione_preventivo",
+]
+
+
+def _is_retryable(exc: Exception) -> bool:
+    if isinstance(exc, gspread.exceptions.APIError):
+        try:
+            status = exc.response.status_code
+            return status == 429 or status >= 500
+        except AttributeError:
+            return True
+    return False
+
+
+def _extract_cell_value(range_data: list) -> str | None:
+    if range_data and range_data[0]:
+        return range_data[0][0]
+    return None
 
 
 def extract_spreadsheet_id(url: str) -> str:
@@ -48,17 +74,23 @@ def open_sheet(spreadsheet_id: str, client_secrets_file: str) -> gspread.Spreads
     return client.open_by_key(spreadsheet_id)
 
 
+@retry(
+    retry=retry_if_exception(_is_retryable),
+    wait=wait_exponential(multiplier=1, min=2, max=60),
+    stop=stop_after_attempt(5),
+    reraise=True,
+)
 def read_metadata(sheet: gspread.Worksheet) -> dict:
-    return {
-        "codice_progetto": sheet.acell("B1").value,
-        "inizio_progetto": sheet.acell("B2").value,
-        "fine_progetto": sheet.acell("B3").value,
-        "link_cep": sheet.acell("D1").value,
-        "titolo_preventivo": sheet.acell("D2").value,
-        "descrizione_preventivo": sheet.acell("D3").value,
-    }
+    results = sheet.batch_get(_METADATA_RANGES)
+    return {key: _extract_cell_value(data) for key, data in zip(_METADATA_KEYS, results)}
 
 
+@retry(
+    retry=retry_if_exception(_is_retryable),
+    wait=wait_exponential(multiplier=1, min=2, max=60),
+    stop=stop_after_attempt(5),
+    reraise=True,
+)
 def read_rows(sheet: gspread.Worksheet) -> list[dict]:
     all_values = sheet.get("A5:I")
     if not all_values:
@@ -67,7 +99,6 @@ def read_rows(sheet: gspread.Worksheet) -> list[dict]:
     headers = [h.lower() for h in all_values[0]]
     rows = []
     for row in all_values[1:]:
-        # Padda la riga se ha meno colonne degli header
         padded = row + [""] * (len(headers) - len(row))
         rows.append(dict(zip(headers, padded)))
 
@@ -105,10 +136,14 @@ def main() -> None:
         print(f"Errore nell'apertura del foglio: {type(e).__name__}: {e}", file=sys.stderr)
         sys.exit(1)
 
-    output_file = title_to_filename(spreadsheet.title)
-    metadata = read_metadata(sheet)
-    rows = read_rows(sheet)
+    try:
+        metadata = read_metadata(sheet)
+        rows = read_rows(sheet)
+    except Exception as e:
+        print(f"Errore nella lettura dei dati: {type(e).__name__}: {e}", file=sys.stderr)
+        sys.exit(1)
 
+    output_file = title_to_filename(spreadsheet.title)
     result = {**metadata, "righe": rows}
 
     with open(output_file, "w", encoding="utf-8") as f:
@@ -117,7 +152,6 @@ def main() -> None:
     print(f"JSON salvato in: {output_file}")
     print(f"  Metadati: {len(metadata)} campi")
     print(f"  Righe esportate: {len(rows)}")
-
 
 
 if __name__ == "__main__":

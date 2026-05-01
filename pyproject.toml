@@ -1,11 +1,20 @@
 [project]
 name = "twig-precep-reader-v1"
 version = "0.1.0"
-description = "Add your description here"
+description = "Legge un foglio Google Spreadsheet con dati di pre-cep Twig e lo esporta in JSON"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "gspread>=6.0.0",
     "google-auth>=2.0.0",
     "google-auth-oauthlib>=1.0.0",
+    "tenacity>=8.0.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

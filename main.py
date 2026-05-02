@@ -11,7 +11,9 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-TOKEN_FILE = "token.json"
+_LLMWIKI_CONFIG_DIR = Path.home() / ".config" / "llmwiki" / "obs-llmwiki-simone-personal-v1"
+CREDENTIALS_FILE = _LLMWIKI_CONFIG_DIR / "credentials.json"
+TOKEN_FILE = _LLMWIKI_CONFIG_DIR / "token-sheets.json"
 
 _METADATA_RANGES = ["B1", "B2", "B3", "D1", "D2", "D3"]
 _METADATA_KEYS = [
@@ -47,19 +49,28 @@ def extract_spreadsheet_id(url: str) -> str:
     return match.group(1)
 
 
-def get_credentials(client_secrets_file: str) -> Credentials:
+def get_credentials() -> Credentials:
     creds = None
 
-    if Path(TOKEN_FILE).exists():
+    if TOKEN_FILE.exists():
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(client_secrets_file, SCOPES)
+            if not CREDENTIALS_FILE.exists():
+                print(
+                    f"ERROR: credentials.json not found at {CREDENTIALS_FILE}\n"
+                    "Download it from Google Cloud Console:\n"
+                    "  APIs & Services → Credentials → OAuth 2.0 Client IDs → Download JSON\n"
+                    "(shared across all llmwiki utils — create the directory if needed)",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
             creds = flow.run_local_server(port=0)
-        Path(TOKEN_FILE).write_text(creds.to_json())
+        TOKEN_FILE.write_text(creds.to_json())
 
     return creds
 
@@ -68,8 +79,8 @@ def title_to_filename(title: str) -> str:
     return re.sub(r"\s+", "_", title).lower() + ".json"
 
 
-def open_sheet(spreadsheet_id: str, client_secrets_file: str) -> gspread.Spreadsheet:
-    creds = get_credentials(client_secrets_file)
+def open_sheet(spreadsheet_id: str) -> gspread.Spreadsheet:
+    creds = get_credentials()
     client = gspread.authorize(creds)
     return client.open_by_key(spreadsheet_id)
 
@@ -111,11 +122,6 @@ def main() -> None:
     )
     parser.add_argument("url", help="URL del file Google Spreadsheet")
     parser.add_argument(
-        "--credentials",
-        default="credentials.json",
-        help="Percorso del file OAuth client secrets scaricato da Google Cloud Console (default: credentials.json)",
-    )
-    parser.add_argument(
         "--sheet",
         default=0,
         type=int,
@@ -130,7 +136,7 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        spreadsheet = open_sheet(spreadsheet_id, args.credentials)
+        spreadsheet = open_sheet(spreadsheet_id)
         sheet = spreadsheet.get_worksheet(args.sheet)
     except Exception as e:
         print(f"Errore nell'apertura del foglio: {type(e).__name__}: {e}", file=sys.stderr)
